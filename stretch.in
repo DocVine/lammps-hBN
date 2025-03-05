@@ -1,0 +1,81 @@
+units                metal
+dimension            3
+boundary            p p p
+neighbor            0.3 bin
+neigh_modify        delay 0
+timestep            0.001
+
+variable	 i	   file r.data
+read_data    /datapath
+
+group      B type 1
+group      N type 2
+
+variable   mylx       equal 'lx'
+variable   lx0        equal ${mylx}
+variable   BNL        equal 400   
+variable   BL         equal 1.45
+variable   LeftBound  equal 2.5*${BL}+20
+variable   RightBound equal ${lx0}-2.5*${BL}-20
+
+region     LeftFixed    block      INF             ${LeftBound}   INF INF INF INF
+region     RightFixed   block      ${RightBound}   INF            INF INF INF INF
+group      left         region     LeftFixed
+group      right        region     RightFixed
+group      boundary     union      left  right
+group      mobile       subtract   all   boundary
+
+pair_style     tersoff
+pair_coeff    * * BNC.tersoff B N 
+
+min_style             cg
+minimize            1e-10 1e-10 5000 5000
+
+velocity all create 300 4928459 dist gaussian units box
+
+compute    1 all stress/atom NULL
+compute    2 all reduce sum c_1[1] c_1[2]
+variable   CorVol equal ly*lx*3.35
+variable   sigmaxx equal c_2[1]/(v_CorVol*10000)
+variable px equal -pxx/10000
+
+variable l_x equal lx
+variable lx0 equal ${l_x}
+variable strain equal (lx-v_lx0)/v_lx0
+
+fix                   1 boundary setforce 0 0 0
+fix                   2 all npt temp 20 20 0.01 iso 0 0 0.1
+thermo                10000
+thermo_modify         lost ignore
+dump                  1 all atom 1000 relax.lammpstrj
+run                   100000
+unfix                 2
+undump                1
+reset_timestep        0
+
+
+velocity left set 0.0 0.0 0.0 units box
+velocity right set 0.0 0.0 0.0 units box
+
+
+compute        corB    B       property/atom x y z
+compute        corN    N       property/atom x y z
+variable       e       equal   -1.6e-19                    
+variable       Area    equal   ${BNL}*${BNL}               
+variable       PBxa    atom    c_corB[2]*${e}*3            
+variable       PNxa    atom    c_corN[2]*${e}*(-3)
+compute        Px      mobile  reduce sum v_PBxa v_PNxa    
+variable       Px      equal   "(c_Px[1]+c_Px[2])/(v_Area*10e-10)"
+
+thermo_style custom step press v_strain v_Px temp lx ly lz vol
+thermo              100
+fix                 2 all nvt temp 20 20 0.01
+fix                 3 all deform 100 y erate 0.005 remap x
+fix                 def1 all print 100 "${strain} ${Px}" file /savepath screen no
+dump                2 all atom 500 algp.lammpstrj
+run                 10000
+
+clear
+next i
+jump stretch.in
+quit
